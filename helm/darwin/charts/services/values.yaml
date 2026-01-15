@@ -258,8 +258,6 @@ services:
     autoscaling:
       enabled: false
     extraEnvVars:
-      - name: ENV
-        value: "darwin-local"
       - name: VAULT_SERVICE_MYSQL_USERNAME
         value: "darwin"
       - name: VAULT_SERVICE_MYSQL_PASSWORD
@@ -333,11 +331,9 @@ services:
       enabled: false
     extraEnvVars:
       # Environment Configuration
-      - name: ENV
-        value: "local"
       # Also include MYSQL_* variants for backward compatibility
-      - name: MYSQL_HOST
-        value: "darwin-mysql"
+      # - name: MYSQL_HOST
+      #   value: "darwin-mysql"
       - name: MYSQL_DATABASE
         value: "darwin_ml_serve"
       - name: MYSQL_USERNAME
@@ -444,8 +440,6 @@ services:
       readinessDelay: 30
     extraEnvVars:
       # Environment Configuration
-      - name: ENV
-        value: "local"
       - name: DEV
         value: "true"
       # Directory for build artifacts
@@ -587,8 +581,6 @@ services:
     autoscaling:
       enabled: false
     extraEnvVars:
-      - name: ENV
-        value: "darwin-local"
       - name: CONFIG_SERVICE_MYSQL_MASTERHOST
         value: "darwin-mysql"
       - name: CONFIG_SERVICE_MYSQL_DATABASE
@@ -636,8 +628,6 @@ services:
     autoscaling:
       enabled: false
     extraEnvVars:
-      - name: ENV
-        value: "darwin-local"
       - name: CONFIG_SERVICE_S3_PATH
         value: "s3://darwin-mlflow-bucket"
       - name: CONFIG_SERVICE_MYSQL_MASTERHOST
@@ -662,8 +652,6 @@ services:
         value: "http://darwin-mlflow-lib:8080"
       - name: MLFLOW_APP_BASE_PATH
         value: ""
-      - name: DARWIN_MYSQL_HOST
-        value: "darwin-mysql"
       - name: MYSQL_PORT
         value: "3306"
       - name: MLFLOW_S3_BUCKET
