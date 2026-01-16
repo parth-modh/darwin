@@ -266,8 +266,6 @@ services:
     autoscaling:
       enabled: false
     extraEnvVars:
-      - name: ENV
-        value: "darwin-local"
       - name: ROOT_PATH
         value: "/compute"
       - name: VAULT_SERVICE_MYSQL_USERNAME
@@ -343,8 +341,6 @@ services:
       enabled: false
     extraEnvVars:
       # Environment Configuration
-      - name: ENV
-        value: "local"
       - name: ROOT_PATH
         value: "/ml-serve"
       # Also include MYSQL_* variants for backward compatibility
@@ -646,8 +642,6 @@ services:
     autoscaling:
       enabled: false
     extraEnvVars:
-      - name: ENV
-        value: "darwin-local"
       - name: ROOT_PATH
         value: "/mlflow-app"
       - name: CONFIG_SERVICE_S3_PATH
