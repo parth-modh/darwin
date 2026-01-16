@@ -2,6 +2,7 @@
 # Darwin project files
 # ===========================
 .setup/
+.cursor/
 kind/shared-storage/
 kind/config/kindkubeconfig.yaml
 config.env
@@ -32,7 +33,6 @@ Thumbs.db
 # Java/Maven
 # ===========================
 target/
-*.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
 *.class
