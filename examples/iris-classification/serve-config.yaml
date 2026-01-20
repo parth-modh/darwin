@@ -1,0 +1,15 @@
+# Iris Classification Spark Example - ML-Serve Infrastructure Configuration
+# Usage: darwin serve config create --serve-name iris-spark-classifier --env darwin-local --file examples/iris-classification/serve-config.yaml
+#
+# This configuration defines the infrastructure settings for deploying
+# the trained Iris Spark Random Forest model.
+
+api_serve_config:
+  backend_type: fastapi           # FastAPI backend for REST API
+  additional_hosts: []            # No additional hosts needed for local
+  fast_api_config:
+    cores: 2                      # 2 CPU cores per replica
+    memory: 4                     # 4GB memory per replica
+    node_capacity_type: ondemand  # Use on-demand instances
+    min_replicas: 1               # Minimum 1 replica
+    max_replicas: 3               # Scale up to 3 replicas
