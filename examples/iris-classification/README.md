@@ -87,7 +87,7 @@ Build all required images and set up the local Kubernetes cluster:
 Wait for all pods to be ready. You can check status with:
 
 ```bash
-export KUBECONFIG=./kind/config/kindkubeconfig.yaml
+export KUBECONFIG=./.setup/kindkubeconfig.yaml
 kubectl get pods -n darwin
 ```
 

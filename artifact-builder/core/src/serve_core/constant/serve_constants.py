@@ -9,8 +9,6 @@ class Config:
     """
 
     def __init__(self, env: str):
-        if env == "darwin-local":
-            env = "local"
         self.env = env
         self._config = CONFIGS_MAP[self.env]
 

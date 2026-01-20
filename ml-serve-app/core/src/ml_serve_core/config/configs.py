@@ -22,8 +22,6 @@ class Config:
 
     def __init__(self):
         env = os.getenv("ENV", "local")
-        if env == "darwin-local":
-            env = "local"
         self.env = env
         if self.env not in CONFIGS_MAP:
             raise ValueError(
