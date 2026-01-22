@@ -1,6 +1,7 @@
 import os
 
 CREDENTIALS_FILE_PATH = "~/.hermes/credential.txt"
+DEFAULT_TOKEN = 'darwin-local-admin-token'
 
 CONFIGS_MAP = {
     "local": {

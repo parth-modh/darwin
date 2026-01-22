@@ -17,7 +17,8 @@ echo -e "${GREEN}🧪 Running Integration Tests${NC}"
 ! "${PROJECT_ROOT}/scripts/check-services.sh" ml-serve-app && { echo -e "${RED}❌ Services unhealthy${NC}"; exit 1; }
 
 # Setup Auth & Dir
-export TEST_AUTH_TOKEN="${TEST_AUTH_TOKEN:-admin-token-default-change-in-production}"
+# Use the bootstrap admin token (matches ML_SERVE_BOOTSTRAP_ADMIN_TOKEN default)
+export TEST_AUTH_TOKEN="${TEST_AUTH_TOKEN:-darwin-local-admin-token}"
 export MLFLOW_URI="${MLFLOW_URI:-http://localhost/mlflow-lib}"
 cd "${ML_SERVE_APP_ROOT}"
 

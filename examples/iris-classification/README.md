@@ -1,16 +1,24 @@
-# Iris Classification with Spark - End-to-End ML Platform Example
+# Iris Classification - Spark Data Processing + Sklearn Training
 
-This example demonstrates the complete ML lifecycle on the Darwin platform using distributed Spark training for iris species classification.
+This example demonstrates the complete ML lifecycle on the Darwin platform using a hybrid approach: **Spark for data processing** and **scikit-learn for model training**.
 
 ## Overview
 
 You will learn how to:
 1. Set up the Darwin ML platform with required services
 2. Create and manage a compute cluster with Spark support
-3. Train a Random Forest model using PySpark ML
-4. Track experiments and register models with MLflow
-5. Deploy models for inference using ML-Serve
-6. Test inference endpoints and clean up resources
+3. Use Spark for distributed data processing (ETL, splitting)
+4. Train a Random Forest model using scikit-learn
+5. Track experiments and register models with MLflow
+6. Deploy models for inference using ML-Serve
+7. Test inference endpoints and clean up resources
+
+## Why This Approach?
+
+- **Spark**: Handles data processing and can scale to large datasets
+- **Scikit-learn**: Reliable model training with excellent MLflow integration
+- **MLflow sklearn flavor**: Works seamlessly with any MLflow server version
+- **Fast serving**: No Spark/Java dependencies needed at inference time
 
 ## Architecture
 
@@ -130,22 +138,18 @@ Save the `CLUSTER_ID` for later steps:
 
 ```bash
 export CLUSTER_ID=<your-cluster-id>
-```
 
-Wait for the cluster to be running:
-
-```bash
-# Check cluster status
+# Wait for cluster to be active (this may take a few minutes)
 darwin compute get --cluster-id $CLUSTER_ID
 ```
 
-Wait until `Status: RUNNING` appears.
+Wait until the cluster status shows `active`.
 
 ---
 
 ## Step 5: Access Jupyter Lab
 
-Once the cluster is running, access Jupyter Lab in your browser:
+Once the cluster is active, access Jupyter Lab in your browser:
 
 ```
 http://localhost/kind-0/{CLUSTER_ID}-jupyter/lab
@@ -168,8 +172,8 @@ In Jupyter Lab:
 # Fix pyOpenSSL/cryptography compatibility issue first
 %pip install --upgrade pyOpenSSL cryptography
 
-# Install main dependencies
-%pip install pandas numpy scikit-learn mlflow pyspark
+# Install main dependencies (pin MLflow to match server version)
+%pip install pandas numpy scikit-learn mlflow==2.12.2 pyspark
 ```
 
 **Cell 2: Import Libraries**
@@ -181,21 +185,20 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 
-# Spark imports
+# Spark imports (for data processing only)
 from pyspark.sql import SparkSession
-from pyspark.ml.feature import VectorAssembler
-from pyspark.ml.classification import RandomForestClassifier as SparkRFClassifier
-from pyspark.ml.evaluation import MulticlassClassificationEvaluator
 
 # MLflow imports
 import mlflow
-import mlflow.spark
+import mlflow.sklearn
 from mlflow import set_tracking_uri, set_experiment
 from mlflow.client import MlflowClient
+from mlflow.models import infer_signature
 
-# Scikit-learn imports
+# Scikit-learn imports (for training and metrics)
 from sklearn.datasets import load_iris
-from sklearn.metrics import confusion_matrix
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
 # Darwin SDK imports
 import ray
@@ -212,9 +215,9 @@ spark_configs = {
     "spark.sql.session.timeZone": "UTC",
     "spark.sql.shuffle.partitions": "4",
     "spark.default.parallelism": "4",
-    "spark.executor.memory": "1g",
+    "spark.executor.memory": "2g",
     "spark.executor.cores": "1",
-    "spark.driver.memory": "1g",
+    "spark.driver.memory": "2g",
     "spark.executor.instances": "2",
 }
 
@@ -228,8 +231,8 @@ print(f"Spark version: {spark.version}")
 MLFLOW_URI = "http://darwin-mlflow-lib.darwin.svc.cluster.local:8080"
 USERNAME = "abc@gmail.com"
 PASSWORD = "password"
-EXPERIMENT_NAME = "iris_spark_classification"
-MODEL_NAME = "IrisSparkRFClassifier"
+EXPERIMENT_NAME = "iris_spark_sklearn_classification"
+MODEL_NAME = "IrisSklearnRFClassifier"
 
 os.environ["MLFLOW_TRACKING_USERNAME"] = USERNAME
 os.environ["MLFLOW_TRACKING_PASSWORD"] = PASSWORD
@@ -239,29 +242,35 @@ set_experiment(experiment_name=EXPERIMENT_NAME)
 print(f"MLflow configured: {MLFLOW_URI}")
 ```
 
-**Cell 5: Load and Prepare Data**
+**Cell 5: Load and Prepare Data with Spark**
 ```python
 # Load Iris dataset
 iris = load_iris(as_frame=True)
 pdf = iris.data.copy()
 pdf.columns = ['sepal_length', 'sepal_width', 'petal_length', 'petal_width']
-pdf['label'] = iris.target.astype(float)
+pdf['label'] = iris.target
 target_names = iris.target_names.tolist()
+feature_names = ['sepal_length', 'sepal_width', 'petal_length', 'petal_width']
 
-# Convert to Spark DataFrame
-df = spark.createDataFrame(pdf)
-feature_cols = [c for c in df.columns if c != 'label']
+print(f"Dataset: Iris")
+print(f"Samples: {len(pdf):,}")
+print(f"Features: {len(feature_names)}")
 
-# Assemble features
-assembler = VectorAssembler(inputCols=feature_cols, outputCol="features")
-df = assembler.transform(df)
+# Use Spark for distributed data splitting (demonstrates Spark processing)
+print("\nUsing Spark for distributed data splitting...")
+spark_df = spark.createDataFrame(pdf)
+train_spark, test_spark = spark_df.randomSplit([0.8, 0.2], seed=42)
 
-# Split data
-train_df, test_df = df.randomSplit([0.8, 0.2], seed=42)
-print(f"Train samples: {train_df.count()}, Test samples: {test_df.count()}")
+# Collect to pandas for sklearn training
+print("Collecting to pandas for training...")
+train_pdf = train_spark.toPandas()
+test_pdf = test_spark.toPandas()
+
+print(f"\nTrain samples: {len(train_pdf):,}")
+print(f"Test samples: {len(test_pdf):,}")
 ```
 
-**Cell 6: Train Model**
+**Cell 6: Train Model with Scikit-learn**
 ```python
 # Define hyperparameters
 hyperparams = {
@@ -271,41 +280,61 @@ hyperparams = {
     "random_state": 42,
 }
 
-# Create and train Random Forest
-rf_classifier = SparkRFClassifier(
-    featuresCol="features",
-    labelCol="label",
-    numTrees=hyperparams["n_estimators"],
-    maxDepth=hyperparams["max_depth"],
-    seed=hyperparams["random_state"],
-)
+# Prepare data for sklearn
+X_train = train_pdf[feature_names].values
+y_train = train_pdf['label'].values
+X_test = test_pdf[feature_names].values
+y_test = test_pdf['label'].values
 
-with mlflow.start_run(run_name=f"spark_rf_iris_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
-    # Train model
-    model = rf_classifier.fit(train_df)
-    print(f"Model trained with {model.getNumTrees} trees")
+with mlflow.start_run(run_name=f"sklearn_rf_iris_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+    # Train sklearn Random Forest
+    print("Training sklearn Random Forest model...")
+    model = RandomForestClassifier(
+        n_estimators=hyperparams["n_estimators"],
+        max_depth=hyperparams["max_depth"],
+        min_samples_leaf=hyperparams["min_samples_leaf"],
+        random_state=hyperparams["random_state"],
+        n_jobs=-1
+    )
+    model.fit(X_train, y_train)
+    print(f"Training completed! Number of trees: {model.n_estimators}")
     
-    # Evaluate
-    test_pred = model.transform(test_df)
-    evaluator = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction")
-    accuracy = evaluator.setMetricName("accuracy").evaluate(test_pred)
-    f1 = evaluator.setMetricName("f1").evaluate(test_pred)
+    # Make predictions
+    y_test_pred = model.predict(X_test)
+    
+    # Calculate metrics
+    accuracy = accuracy_score(y_test, y_test_pred)
+    precision = precision_score(y_test, y_test_pred, average='weighted')
+    recall = recall_score(y_test, y_test_pred, average='weighted')
+    f1 = f1_score(y_test, y_test_pred, average='weighted')
     
     # Log to MLflow
     mlflow.log_params(hyperparams)
+    mlflow.log_param("training_framework", "sklearn")
+    mlflow.log_param("data_processing", "spark")
     mlflow.log_metric("test_accuracy", accuracy)
+    mlflow.log_metric("test_precision", precision)
+    mlflow.log_metric("test_recall", recall)
     mlflow.log_metric("test_f1", f1)
     
-    # Save model artifacts
-    with tempfile.TemporaryDirectory() as tmpdir:
-        model_path = os.path.join(tmpdir, "spark_model")
-        model.save(model_path)
-        mlflow.log_artifacts(model_path, artifact_path="model/spark_model")
+    # Log sklearn model
+    sample_input = pd.DataFrame([X_train[0]], columns=feature_names)
+    sample_output = pd.DataFrame({"prediction": [0]})
+    signature = infer_signature(sample_input, sample_output)
+    
+    mlflow.sklearn.log_model(
+        sk_model=model,
+        artifact_path="model",
+        signature=signature,
+        input_example=sample_input
+    )
     
     run_id = mlflow.active_run().info.run_id
     experiment_id = mlflow.active_run().info.experiment_id
     
     print(f"\nTest Accuracy: {accuracy:.4f}")
+    print(f"Test Precision: {precision:.4f}")
+    print(f"Test Recall: {recall:.4f}")
     print(f"Test F1: {f1:.4f}")
     print(f"Run ID: {run_id}")
 ```
@@ -353,17 +382,17 @@ Back in your terminal, verify the model was registered:
 darwin mlflow model list
 
 # Get details of the iris model
-darwin mlflow model get --name IrisSparkRFClassifier
+darwin mlflow model get --name IrisSklearnRFClassifier
 
 # Get specific version details
-darwin mlflow model get --name IrisSparkRFClassifier --version 1
+darwin mlflow model get --name IrisSklearnRFClassifier --version 1
 ```
 
 Expected output:
 ```
-Model: IrisSparkRFClassifier
+Model: IrisSklearnRFClassifier
 Latest Version: 1
-Description: Iris Spark RF Classifier
+Description: Iris Sklearn RF Classifier
 ```
 
 ---
@@ -384,7 +413,34 @@ darwin compute get --cluster-id $CLUSTER_ID
 
 ---
 
-## Step 9: Create ML-Serve Application
+## Step 9: Configure Serve Authentication
+
+Before using serve commands, configure your authentication token:
+
+```bash
+# Configure with default darwin-local token (recommended for local development)
+darwin serve configure
+```
+
+---
+
+## Step 10: Create Serve Environment
+
+Create the serve environment if it doesn't exist:
+
+```bash
+darwin serve environment create \
+  --name darwin-local \
+  --domain-suffix .local \
+  --cluster-name kind \
+  --namespace serve
+```
+
+If the environment already exists, you'll see a message indicating it's already configured.
+
+---
+
+## Step 11: Create ML-Serve Application
 
 Create a new serve application for the model:
 
@@ -398,54 +454,6 @@ darwin serve create \
 
 ---
 
-## Step 10: Configure Serve Infrastructure
-
-Create the infrastructure configuration for the serve:
-
-```bash
-darwin serve config create \
-  --serve-name iris-spark-classifier \
-  --env darwin-local \
-  --file examples/iris-classification/serve-config.yaml
-```
-
-Or configure inline:
-
-```bash
-darwin serve config create \
-  --serve-name iris-spark-classifier \
-  --env darwin-local \
-  --backend-type fastapi \
-  --cores 2 \
-  --memory 4 \
-  --node-capacity ondemand \
-  --min-replicas 1 \
-  --max-replicas 3
-```
-
----
-
-## Step 11: Build Serve Artifact
-
-Build the deployment artifact:
-
-```bash
-darwin serve artifact create \
-  --serve-name iris-spark-classifier \
-  --version v1.0.0 \
-  --github-repo-url https://github.com/your-org/iris-serve-repo \
-  --branch main
-```
-
-Check build status:
-
-```bash
-darwin serve artifact jobs
-darwin serve artifact status --job-id <JOB_ID>
-```
-
----
-
 ## Step 12: Deploy the Model
 
 Deploy the model using the MLflow model URI:
@@ -454,7 +462,7 @@ Deploy the model using the MLflow model URI:
 darwin serve deploy-model \
   --serve-name iris-spark-classifier \
   --artifact-version v1.0.0 \
-  --model-uri models:/IrisSparkRFClassifier/1 \
+  --model-uri models:/IrisSklearnRFClassifier/1 \
   --env darwin-local \
   --cores 2 \
   --memory 4 \
@@ -462,14 +470,6 @@ darwin serve deploy-model \
   --min-replicas 1 \
   --max-replicas 3
 ```
-
-Check deployment status:
-
-```bash
-darwin serve status --name iris-spark-classifier --env darwin-local
-```
-
-Wait until the status shows `RUNNING`.
 
 ---
 
@@ -480,7 +480,7 @@ Test the deployed model with sample requests:
 **Using curl:**
 
 ```bash
-curl -X POST http://localhost/serve/iris-spark-classifier/predict \
+curl -X POST http://localhost/iris-spark-classifier/predict \
   -H "Content-Type: application/json" \
   -d @examples/iris-classification/sample-request.json
 ```
@@ -489,14 +489,12 @@ curl -X POST http://localhost/serve/iris-spark-classifier/predict \
 
 ```json
 {
-  "instances": [
-    {
-      "sepal_length": 5.1,
-      "sepal_width": 3.5,
-      "petal_length": 1.4,
-      "petal_width": 0.2
-    }
-  ]
+  "features": {
+    "sepal_length": 5.1,
+    "sepal_width": 3.5,
+    "petal_length": 1.4,
+    "petal_width": 0.2
+  }
 }
 ```
 
@@ -504,12 +502,8 @@ curl -X POST http://localhost/serve/iris-spark-classifier/predict \
 
 ```json
 {
-  "predictions": [
-    {
-      "class": 0,
-      "species": "setosa",
-      "probability": [0.95, 0.03, 0.02]
-    }
+  "scores": [
+    0
   ]
 }
 ```
@@ -517,15 +511,20 @@ curl -X POST http://localhost/serve/iris-spark-classifier/predict \
 **Test with different iris samples:**
 
 ```bash
-# Versicolor sample
-curl -X POST http://localhost/serve/iris-spark-classifier/predict \
+# Setosa sample (class 0)
+curl -X POST http://localhost/iris-spark-classifier/predict \
   -H "Content-Type: application/json" \
-  -d '{"instances": [{"sepal_length": 5.9, "sepal_width": 3.0, "petal_length": 4.2, "petal_width": 1.5}]}'
+  -d '{"features": {"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}}'
 
-# Virginica sample
-curl -X POST http://localhost/serve/iris-spark-classifier/predict \
+# Versicolor sample (class 1)
+curl -X POST http://localhost/iris-spark-classifier/predict \
   -H "Content-Type: application/json" \
-  -d '{"instances": [{"sepal_length": 6.7, "sepal_width": 3.0, "petal_length": 5.2, "petal_width": 2.3}]}'
+  -d '{"features": {"sepal_length": 5.9, "sepal_width": 3.0, "petal_length": 4.2, "petal_width": 1.5}}'
+
+# Virginica sample (class 2)
+curl -X POST http://localhost/iris-spark-classifier/predict \
+  -H "Content-Type: application/json" \
+  -d '{"features": {"sepal_length": 6.7, "sepal_width": 3.0, "petal_length": 5.2, "petal_width": 2.3}}'
 ```
 
 ---
@@ -536,12 +535,6 @@ When done, undeploy the serve application:
 
 ```bash
 darwin serve undeploy-model --serve-name iris-spark-classifier --env darwin-local
-```
-
-Verify undeployment:
-
-```bash
-darwin serve status --name iris-spark-classifier --env darwin-local
 ```
 
 ---
@@ -567,12 +560,12 @@ In this example, you learned how to:
 | 3 | Configure CLI | `darwin config set --env darwin-local` |
 | 4 | Create cluster | `darwin compute create --file cluster-config.yaml` |
 | 5 | Access Jupyter | Browser: `http://localhost/kind-0/{cluster_id}-jupyter/lab` |
-| 6 | Train model | Run notebook cells |
-| 7 | Verify model | `darwin mlflow model get --name IrisSparkRFClassifier` |
+| 6 | Train model | Run notebook cells (Spark data processing + sklearn training) |
+| 7 | Verify model | `darwin mlflow model get --name IrisSklearnRFClassifier` |
 | 8 | Stop cluster | `darwin compute stop --cluster-id $CLUSTER_ID` |
-| 9 | Create serve | `darwin serve create --name iris-spark-classifier ...` |
-| 10 | Configure serve | `darwin serve config create ...` |
-| 11 | Build artifact | `darwin serve artifact create ...` |
+| 9 | Configure serve auth | `darwin serve configure` |
+| 10 | Create environment | `darwin serve environment create ...` |
+| 11 | Create serve app | `darwin serve create --name iris-spark-classifier ...` |
 | 12 | Deploy model | `darwin serve deploy-model ...` |
 | 13 | Test inference | `curl -X POST .../predict` |
 | 14 | Undeploy | `darwin serve undeploy-model ...` |
@@ -625,9 +618,8 @@ kubectl rollout restart deployment -n ingress-nginx ingress-nginx-controller
 | File | Description |
 |------|-------------|
 | `README.md` | This guide |
-| `train_iris_model_spark.ipynb` | Complete training notebook |
-| `train_iris_model.ipynb` | Alternative non-Spark version |
+| `train_iris_model_spark.ipynb` | Hybrid training notebook (Spark + sklearn) |
+| `train_iris_model.ipynb` | Pure sklearn version (no Spark) |
 | `init-example.sh` | Quick setup script |
 | `cluster-config.yaml` | Compute cluster configuration |
-| `serve-config.yaml` | ML-Serve infrastructure config |
 | `sample-request.json` | Sample inference request |

@@ -270,6 +270,20 @@ darwin workspace cluster attach \
 
 Deploy and manage ML model serving endpoints.
 
+### Initial Setup (Required)
+
+Before using any serve commands, configure your authentication token:
+
+```bash
+# Configure with default darwin-local token (recommended for local development)
+darwin serve configure
+
+# Or configure with a custom token
+darwin serve configure --token <your-token>
+```
+
+> **Note**: The default token `darwin-local-admin-token` is pre-configured for the darwin-local environment.
+
 ### Environment Operations
 
 | Command | Description | Example |
@@ -301,6 +315,7 @@ darwin serve environment update \
 
 | Command | Description | Example |
 |---------|-------------|---------|
+| `serve configure` | Configure auth token (run first!) | `darwin serve configure` |
 | `serve list` | List all serves | `darwin serve list` |
 | `serve create` | Create a serve | See below |
 | `serve get` | Get serve overview | `darwin serve get --name my-serve` |

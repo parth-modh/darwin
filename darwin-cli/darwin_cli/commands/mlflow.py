@@ -5,12 +5,17 @@ from typing import Optional
 from loguru import logger
 
 from darwin_cli.utils.utils import _run_sync
+from darwin_mlflow.client import mlflow_client
 
 
 def get_mlflow_client():
     """Get the MLflow client instance from the SDK."""
-    from darwin_mlflow.client import mlflow_client
     return mlflow_client
+
+
+def get_registry_store():
+    """Get the MLflow registry store directly to bypass prompt filter."""
+    return mlflow_client._get_registry_client().store
 
 
 app = typer.Typer(
@@ -192,8 +197,9 @@ def model_list(
 ):
     """List all registered models."""
     try:
-        client = get_mlflow_client()
-        models = _run_sync(client.search_registered_models, retries=retries)
+        # Use store directly to bypass MLflow 3.x prompt filter
+        store = get_registry_store()
+        models = _run_sync(store.search_registered_models, None, 100, None, None, retries=retries)
         logger.info("Listed {} registered models", len(models))
         for model in models:
             typer.echo(f"- {model.name}")
@@ -209,9 +215,9 @@ def model_search(
 ):
     """Search registered models by name."""
     try:
-        client = get_mlflow_client()
+        store = get_registry_store()
         filter_string = f"name LIKE '%{query}%'"
-        models = _run_sync(client.search_registered_models, filter_string=filter_string, retries=retries)
+        models = _run_sync(store.search_registered_models, filter_string, 100, None, None, retries=retries)
         logger.info("Found {} models matching '{}'", len(models), query)
         for model in models:
             typer.echo(f"- {model.name}")

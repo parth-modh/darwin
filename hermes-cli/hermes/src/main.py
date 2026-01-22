@@ -3,6 +3,7 @@ import os
 from typing import Optional, Dict
 import typer
 from hermes.src.cli.deployer_request_dtos import APIServeConfig, APIServeDeploymentConfig
+from hermes.src.config.constants import DEFAULT_TOKEN
 from hermes.src.cli.hermes_deployer import HermesDeployer
 from hermes.src.cli.hermes_exceptions import HermesException, HermesErrorCodes
 from hermes.src.config.config import Config
@@ -126,6 +127,12 @@ def env_delete(name: str = typer.Option(..., "--name", help="Environment name"))
 # ----------------------------
 # Serve Operations
 # ----------------------------
+
+@app.command(name="configure")
+def configure(token: str = typer.Option(DEFAULT_TOKEN, "--token", help="Token for existing User")):
+    """CLI command to configure the user token. Currently supported token for darwin-local environment"""
+    HermesDeployer.set_user_token(token)
+
 
 @app.command("list")
 def serve_list():

@@ -23,9 +23,11 @@ def test_auth_token() -> str:
     
     Set the token here directly to avoid exporting environment variables.
     This token must match a user in the deployed environment.
+    
+    Default token matches ML_SERVE_BOOTSTRAP_ADMIN_TOKEN from env.example
     """
-    # Replace this with your actual token
-    return "admin-token-default-change-in-production"
+    # Use the default bootstrap admin token for local development
+    return os.environ.get("TEST_AUTH_TOKEN", "darwin-local-admin-token")
 
 
 @pytest.fixture(scope="session")

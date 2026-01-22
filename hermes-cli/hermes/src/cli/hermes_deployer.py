@@ -765,14 +765,10 @@ class HermesDeployer:
         except Exception as e:
             handle_hermes_exception(e)
 
-    @classmethod
-    def set_user_token(cls):
+    @staticmethod
+    def set_user_token(token: str):
         """Set user token by writing it to credentials file in format HERMES_USER_TOKEN=<token>"""
         try:
-            token = os.getenv("HERMES_USER_TOKEN")
-            if token == "default":
-                raise ValueError("Hermes token not found in environment variables")
-
             credentials_path = os.path.expanduser(CREDENTIALS_FILE_PATH)
 
             # Create .hermes directory if it doesn't exist
@@ -781,6 +777,8 @@ class HermesDeployer:
             # Write token to file in format HERMES_USER_TOKEN=<token>
             with open(credentials_path, "w") as f:
                 f.write(f"HERMES_USER_TOKEN={token}")
+            
+            logger.info(f"Token saved successfully to {credentials_path}")
 
         except Exception as e:
             raise HermesException(HermesErrorCodes.CONFIG_ERROR.value.code, f"Failed to set user token: {str(e)}")

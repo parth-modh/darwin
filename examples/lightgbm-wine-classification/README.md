@@ -1,16 +1,24 @@
-# Wine Classification with LightGBM on Spark - End-to-End ML Platform Example
+# Wine Classification - Spark Data Processing + LightGBM Training
 
-This example demonstrates the complete ML lifecycle on the Darwin platform using LightGBM with Spark data preparation for wine quality classification.
+This example demonstrates the complete ML lifecycle on the Darwin platform using a hybrid approach: **Spark for data processing** and **native LightGBM for model training**.
 
 ## Overview
 
 You will learn how to:
 1. Set up the Darwin ML platform with required services
 2. Create and manage a compute cluster with Spark support
-3. Train a LightGBM model with distributed Spark data preparation
-4. Track experiments and register models with MLflow
-5. Deploy models for inference using ML-Serve
-6. Test inference endpoints and clean up resources
+3. Use Spark for distributed data processing (ETL, splitting)
+4. Train a LightGBM model using native LightGBM
+5. Track experiments and register models with MLflow
+6. Deploy models for inference using ML-Serve
+7. Test inference endpoints and clean up resources
+
+## Why This Approach?
+
+- **Spark**: Handles data processing and can scale to large datasets
+- **Native LightGBM**: Efficient gradient boosting on the driver node
+- **MLflow lightgbm flavor**: Reliable model logging and versioning
+- **Fast serving**: No Spark/Java dependencies needed at inference time
 
 ## Architecture
 
@@ -150,22 +158,18 @@ Save the `CLUSTER_ID` for later steps:
 
 ```bash
 export CLUSTER_ID=<your-cluster-id>
-```
 
-Wait for the cluster to be running:
-
-```bash
-# Check cluster status
+# Wait for cluster to be active (this may take a few minutes)
 darwin compute get --cluster-id $CLUSTER_ID
 ```
 
-Wait until `Status: RUNNING` appears.
+Wait until the cluster status shows `active`.
 
 ---
 
 ## Step 5: Access Jupyter Lab
 
-Once the cluster is running, access Jupyter Lab in your browser:
+Once the cluster is active, access Jupyter Lab in your browser:
 
 ```
 http://localhost/kind-0/{CLUSTER_ID}-jupyter/lab
@@ -188,8 +192,8 @@ In Jupyter Lab:
 # Fix pyOpenSSL/cryptography compatibility issue first
 %pip install --upgrade pyOpenSSL cryptography
 
-# Install main dependencies
-%pip install lightgbm pandas numpy scikit-learn mlflow pyspark
+# Install main dependencies (pin MLflow to match server version)
+%pip install lightgbm pandas numpy scikit-learn mlflow==2.12.2 pyspark
 ```
 
 **Cell 2: Import Libraries**
@@ -204,25 +208,31 @@ from datetime import datetime
 # LightGBM imports
 import lightgbm as lgb
 
-# Spark imports
+# Spark imports (for data processing only)
 from pyspark.sql import SparkSession
-from pyspark.ml.feature import VectorAssembler
+from pyspark.sql.functions import col
 
 # MLflow imports
 import mlflow
 import mlflow.lightgbm
 from mlflow import set_tracking_uri, set_experiment
 from mlflow.client import MlflowClient
+from mlflow.models import infer_signature
 
-# Scikit-learn imports
+# Scikit-learn imports (for loading dataset and metrics)
 from sklearn.datasets import load_wine
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
-# Darwin SDK imports
-import ray
-from darwin import init_spark_with_configs, stop_spark
-
-print("Darwin SDK available - will use distributed Spark on Darwin cluster")
+# Darwin SDK imports (optional - only available on Darwin cluster)
+DARWIN_SDK_AVAILABLE = False
+try:
+    import ray
+    from darwin import init_spark_with_configs, stop_spark
+    DARWIN_SDK_AVAILABLE = True
+    print("Darwin SDK available - will use distributed Spark on Darwin cluster")
+except ImportError as e:
+    print(f"Darwin SDK not available: {e}")
+    print("Running in LOCAL mode - will use local Spark session")
 ```
 
 **Cell 3: Initialize Spark with Darwin SDK**
@@ -233,9 +243,9 @@ spark_configs = {
     "spark.sql.session.timeZone": "UTC",
     "spark.sql.shuffle.partitions": "4",
     "spark.default.parallelism": "4",
-    "spark.executor.memory": "1g",
+    "spark.executor.memory": "2g",
     "spark.executor.cores": "1",
-    "spark.driver.memory": "1g",
+    "spark.driver.memory": "2g",
     "spark.executor.instances": "2",
 }
 
@@ -249,7 +259,7 @@ print(f"Spark version: {spark.version}")
 MLFLOW_URI = "http://darwin-mlflow-lib.darwin.svc.cluster.local:8080"
 USERNAME = "abc@gmail.com"
 PASSWORD = "password"
-EXPERIMENT_NAME = "wine_lightgbm_spark_classification"
+EXPERIMENT_NAME = "wine_spark_lightgbm_classification"
 MODEL_NAME = "WineLightGBMSparkClassifier"
 
 os.environ["MLFLOW_TRACKING_USERNAME"] = USERNAME
@@ -260,27 +270,43 @@ set_experiment(experiment_name=EXPERIMENT_NAME)
 print(f"MLflow configured: {MLFLOW_URI}")
 ```
 
-**Cell 5: Load and Prepare Data**
+**Cell 5: Load and Prepare Data with Spark**
 ```python
 # Load Wine dataset
 data = load_wine(as_frame=True)
 pdf = data.data.copy()
 pdf['label'] = data.target
 
-# Convert to Spark DataFrame
-df = spark.createDataFrame(pdf)
-feature_cols = [c for c in df.columns if c != 'label']
+feature_names = data.feature_names
 
-# Assemble features
-assembler = VectorAssembler(inputCols=feature_cols, outputCol="features")
-df = assembler.transform(df)
+print(f"Dataset: Wine")
+print(f"Samples: {len(pdf):,}")
+print(f"Features: {len(feature_names)}")
 
-# Split data
-train_df, test_df = df.randomSplit([0.8, 0.2], seed=42)
-print(f"Train samples: {train_df.count()}, Test samples: {test_df.count()}")
+print(f"\nFeature names:")
+for i, col_name in enumerate(feature_names, 1):
+    print(f"  {i}. {col_name}")
+
+print(f"\nTarget distribution:")
+for class_idx in range(3):
+    count = (pdf['label'] == class_idx).sum()
+    print(f"  Class {class_idx}: {count} samples")
+
+# Use Spark for distributed data splitting (demonstrates Spark processing)
+print("\nUsing Spark for distributed data splitting...")
+spark_df = spark.createDataFrame(pdf)
+train_spark, test_spark = spark_df.randomSplit([0.8, 0.2], seed=42)
+
+# Collect to pandas for LightGBM training
+print("Collecting to pandas for training...")
+train_pdf = train_spark.toPandas()
+test_pdf = test_spark.toPandas()
+
+print(f"\nTrain samples: {len(train_pdf):,}")
+print(f"Test samples: {len(test_pdf):,}")
 ```
 
-**Cell 6: Train Model**
+**Cell 6: Train Model with Native LightGBM**
 ```python
 # Define hyperparameters
 hyperparams = {
@@ -294,58 +320,80 @@ hyperparams = {
     "num_iterations": 100,
 }
 
-# Convert to Pandas for LightGBM training
-train_pdf = train_df.select(feature_cols + ["label"]).toPandas()
-test_pdf = test_df.select(feature_cols + ["label"]).toPandas()
-
-X_train = train_pdf[feature_cols].values
+# Prepare data
+X_train = train_pdf[feature_names].values
 y_train = train_pdf["label"].values
-X_test = test_pdf[feature_cols].values
+X_test = test_pdf[feature_names].values
 y_test = test_pdf["label"].values
 
-# Create LightGBM datasets
-train_data = lgb.Dataset(X_train, label=y_train, feature_name=feature_cols)
-test_data = lgb.Dataset(X_test, label=y_test, reference=train_data)
+# Get sample input for MLflow logging
+sample_input = train_pdf[feature_names].head(1)
 
-# LightGBM parameters
-params = {
-    "objective": "multiclass",
-    "num_class": 3,
-    "num_leaves": 31,
-    "learning_rate": 0.05,
-    "feature_fraction": 0.9,
-    "bagging_fraction": 0.8,
-    "bagging_freq": 5,
-    "verbose": -1,
-    "seed": 42,
-}
-
-with mlflow.start_run(run_name=f"spark_lightgbm_wine_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
-    # Train model
-    model = lgb.train(params, train_data, num_boost_round=100, valid_sets=[train_data, test_data])
-    print("Model trained!")
+with mlflow.start_run(run_name=f"lightgbm_wine_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+    # Create LightGBM datasets
+    train_data = lgb.Dataset(X_train, label=y_train, feature_name=list(feature_names))
+    test_data = lgb.Dataset(X_test, label=y_test, feature_name=list(feature_names), reference=train_data)
     
-    # Evaluate
+    # LightGBM parameters
+    params = {
+        "objective": hyperparams["objective"],
+        "num_class": hyperparams["num_class"],
+        "num_leaves": hyperparams["num_leaves"],
+        "learning_rate": hyperparams["learning_rate"],
+        "feature_fraction": hyperparams["feature_fraction"],
+        "bagging_fraction": hyperparams["bagging_fraction"],
+        "bagging_freq": hyperparams["bagging_freq"],
+        "verbose": -1,
+        "seed": 42,
+    }
+    
+    # Train model
+    print("Training LightGBM model...")
+    model = lgb.train(
+        params,
+        train_data,
+        num_boost_round=hyperparams["num_iterations"],
+        valid_sets=[train_data, test_data],
+        valid_names=["train", "test"],
+    )
+    print("Training completed!")
+    
+    # Make predictions
     test_proba = model.predict(X_test)
     test_pred = np.argmax(test_proba, axis=1)
+    
+    # Calculate metrics
     accuracy = accuracy_score(y_test, test_pred)
+    precision = precision_score(y_test, test_pred, average="weighted")
+    recall = recall_score(y_test, test_pred, average="weighted")
     f1 = f1_score(y_test, test_pred, average="weighted")
     
     # Log to MLflow
     mlflow.log_params(hyperparams)
+    mlflow.log_param("training_framework", "lightgbm")
+    mlflow.log_param("data_processing", "spark")
     mlflow.log_metric("test_accuracy", accuracy)
+    mlflow.log_metric("test_precision", precision)
+    mlflow.log_metric("test_recall", recall)
     mlflow.log_metric("test_f1", f1)
     
-    # Save model artifacts
-    with tempfile.TemporaryDirectory() as tmpdir:
-        model_file = os.path.join(tmpdir, "model.txt")
-        model.save_model(model_file)
-        mlflow.log_artifact(model_file, artifact_path="model")
+    # Log LightGBM model using mlflow.lightgbm (IMPORTANT!)
+    sample_output = pd.DataFrame({"prediction": [0]})
+    signature = infer_signature(sample_input, sample_output)
+    
+    mlflow.lightgbm.log_model(
+        lgb_model=model,
+        artifact_path="model",
+        signature=signature,
+        input_example=sample_input
+    )
     
     run_id = mlflow.active_run().info.run_id
     experiment_id = mlflow.active_run().info.experiment_id
     
     print(f"\nTest Accuracy: {accuracy:.4f}")
+    print(f"Test Precision: {precision:.4f}")
+    print(f"Test Recall: {recall:.4f}")
     print(f"Test F1: {f1:.4f}")
     print(f"Run ID: {run_id}")
 ```
@@ -374,7 +422,11 @@ print(f"\nModel URI for deployment: models:/{MODEL_NAME}/{result.version}")
 
 **Cell 8: Cleanup Spark**
 ```python
-stop_spark()
+# Cleanup: Stop Spark session properly
+if DARWIN_SDK_AVAILABLE:
+    stop_spark()
+else:
+    spark.stop()
 print("Spark session stopped")
 ```
 
@@ -424,7 +476,34 @@ darwin compute get --cluster-id $CLUSTER_ID
 
 ---
 
-## Step 9: Create ML-Serve Application
+## Step 9: Configure Serve Authentication
+
+Before using serve commands, configure your authentication token:
+
+```bash
+# Configure with default darwin-local token (recommended for local development)
+darwin serve configure
+```
+
+---
+
+## Step 10: Create Serve Environment
+
+Create the serve environment if it doesn't exist:
+
+```bash
+darwin serve environment create \
+  --name darwin-local \
+  --domain-suffix .local \
+  --cluster-name kind \
+  --namespace serve
+```
+
+If the environment already exists, you'll see a message indicating it's already configured.
+
+---
+
+## Step 11: Create ML-Serve Application
 
 Create a new serve application for the model:
 
@@ -438,54 +517,6 @@ darwin serve create \
 
 ---
 
-## Step 10: Configure Serve Infrastructure
-
-Create the infrastructure configuration for the serve:
-
-```bash
-darwin serve config create \
-  --serve-name wine-lightgbm-classifier \
-  --env darwin-local \
-  --file examples/lightgbm-wine-classification/serve-config.yaml
-```
-
-Or configure inline:
-
-```bash
-darwin serve config create \
-  --serve-name wine-lightgbm-classifier \
-  --env darwin-local \
-  --backend-type fastapi \
-  --cores 2 \
-  --memory 4 \
-  --node-capacity ondemand \
-  --min-replicas 1 \
-  --max-replicas 3
-```
-
----
-
-## Step 11: Build Serve Artifact
-
-Build the deployment artifact:
-
-```bash
-darwin serve artifact create \
-  --serve-name wine-lightgbm-classifier \
-  --version v1.0.0 \
-  --github-repo-url https://github.com/your-org/wine-serve-repo \
-  --branch main
-```
-
-Check build status:
-
-```bash
-darwin serve artifact jobs
-darwin serve artifact status --job-id <JOB_ID>
-```
-
----
-
 ## Step 12: Deploy the Model
 
 Deploy the model using the MLflow model URI:
@@ -494,7 +525,7 @@ Deploy the model using the MLflow model URI:
 darwin serve deploy-model \
   --serve-name wine-lightgbm-classifier \
   --artifact-version v1.0.0 \
-  --model-uri models:/WineLightGBMSparkClassifier/1 \
+  --model-uri models:/WineLightGBMClassifier/1 \
   --env darwin-local \
   --cores 2 \
   --memory 4 \
@@ -502,14 +533,6 @@ darwin serve deploy-model \
   --min-replicas 1 \
   --max-replicas 3
 ```
-
-Check deployment status:
-
-```bash
-darwin serve status --name wine-lightgbm-classifier --env darwin-local
-```
-
-Wait until the status shows `RUNNING`.
 
 ---
 
@@ -520,7 +543,7 @@ Test the deployed model with sample requests:
 **Using curl:**
 
 ```bash
-curl -X POST http://localhost/serve/wine-lightgbm-classifier/predict \
+curl -X POST http://localhost/wine-lightgbm-classifier/predict \
   -H "Content-Type: application/json" \
   -d @examples/lightgbm-wine-classification/sample-request.json
 ```
@@ -529,23 +552,21 @@ curl -X POST http://localhost/serve/wine-lightgbm-classifier/predict \
 
 ```json
 {
-  "instances": [
-    {
-      "alcohol": 14.23,
-      "malic_acid": 1.71,
-      "ash": 2.43,
-      "alcalinity_of_ash": 15.6,
-      "magnesium": 127.0,
-      "total_phenols": 2.8,
-      "flavanoids": 3.06,
-      "nonflavanoid_phenols": 0.28,
-      "proanthocyanins": 2.29,
-      "color_intensity": 5.64,
-      "hue": 1.04,
-      "od280_od315_of_diluted_wines": 3.92,
-      "proline": 1065.0
-    }
-  ]
+  "features": {
+    "alcohol": 12.85,
+    "malic_acid": 1.6,
+    "ash": 2.52,
+    "alcalinity_of_ash": 17.8,
+    "magnesium": 95,
+    "total_phenols": 2.48,
+    "flavanoids": 2.37,
+    "nonflavanoid_phenols": 0.26,
+    "proanthocyanins": 1.46,
+    "color_intensity": 3.93,
+    "hue": 1.09,
+    "od280/od315_of_diluted_wines": 3.63,
+    "proline": 1015
+  }
 }
 ```
 
@@ -553,11 +574,12 @@ curl -X POST http://localhost/serve/wine-lightgbm-classifier/predict \
 
 ```json
 {
-  "predictions": [
-    {
-      "class": 0,
-      "probability": [0.92, 0.05, 0.03]
-    }
+  "scores": [
+    [
+      0.982170003685416,
+      0.015241154331924857,
+      0.002588841982659213
+    ]
   ]
 }
 ```
@@ -565,46 +587,67 @@ curl -X POST http://localhost/serve/wine-lightgbm-classifier/predict \
 **Test with different wine samples:**
 
 ```bash
-# Class 1 sample (different cultivar)
-curl -X POST http://localhost/serve/wine-lightgbm-classifier/predict \
+# Class 0 sample (cultivar 0)
+curl -X POST http://localhost/wine-lightgbm-classifier/predict \
   -H "Content-Type: application/json" \
   -d '{
-    "instances": [{
+    "features": {
+      "alcohol": 14.23,
+      "malic_acid": 1.71,
+      "ash": 2.43,
+      "alcalinity_of_ash": 15.6,
+      "magnesium": 127,
+      "total_phenols": 2.8,
+      "flavanoids": 3.06,
+      "nonflavanoid_phenols": 0.28,
+      "proanthocyanins": 2.29,
+      "color_intensity": 5.64,
+      "hue": 1.04,
+      "od280/od315_of_diluted_wines": 3.92,
+      "proline": 1065
+    }
+  }'
+
+# Class 1 sample (cultivar 1)
+curl -X POST http://localhost/wine-lightgbm-classifier/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "features": {
       "alcohol": 12.37,
       "malic_acid": 1.13,
       "ash": 2.16,
       "alcalinity_of_ash": 19.0,
-      "magnesium": 87.0,
+      "magnesium": 87,
       "total_phenols": 3.5,
       "flavanoids": 3.1,
       "nonflavanoid_phenols": 0.19,
       "proanthocyanins": 1.87,
       "color_intensity": 4.45,
       "hue": 1.22,
-      "od280_od315_of_diluted_wines": 2.87,
-      "proline": 420.0
-    }]
+      "od280/od315_of_diluted_wines": 2.87,
+      "proline": 420
+    }
   }'
 
-# Class 2 sample (another cultivar)
-curl -X POST http://localhost/serve/wine-lightgbm-classifier/predict \
+# Class 2 sample (cultivar 2)
+curl -X POST http://localhost/wine-lightgbm-classifier/predict \
   -H "Content-Type: application/json" \
   -d '{
-    "instances": [{
+    "features": {
       "alcohol": 13.11,
       "malic_acid": 1.01,
       "ash": 1.7,
       "alcalinity_of_ash": 15.0,
-      "magnesium": 78.0,
+      "magnesium": 78,
       "total_phenols": 2.98,
       "flavanoids": 3.18,
       "nonflavanoid_phenols": 0.26,
       "proanthocyanins": 2.28,
       "color_intensity": 5.3,
       "hue": 1.12,
-      "od280_od315_of_diluted_wines": 3.18,
-      "proline": 502.0
-    }]
+      "od280/od315_of_diluted_wines": 3.18,
+      "proline": 502
+    }
   }'
 ```
 
@@ -616,12 +659,6 @@ When done, undeploy the serve application:
 
 ```bash
 darwin serve undeploy-model --serve-name wine-lightgbm-classifier --env darwin-local
-```
-
-Verify undeployment:
-
-```bash
-darwin serve status --name wine-lightgbm-classifier --env darwin-local
 ```
 
 ---
@@ -647,12 +684,12 @@ In this example, you learned how to:
 | 3 | Configure CLI | `darwin config set --env darwin-local` |
 | 4 | Create cluster | `darwin compute create --file cluster-config.yaml` |
 | 5 | Access Jupyter | Browser: `http://localhost/kind-0/{cluster_id}-jupyter/lab` |
-| 6 | Train model | Run notebook cells |
-| 7 | Verify model | `darwin mlflow model get --name WineLightGBMSparkClassifier` |
+| 6 | Train model | Run notebook cells (hybrid Spark + LightGBM) |
+| 7 | Verify model | `darwin mlflow model get --name WineLightGBMClassifier` |
 | 8 | Stop cluster | `darwin compute stop --cluster-id $CLUSTER_ID` |
-| 9 | Create serve | `darwin serve create --name wine-lightgbm-classifier ...` |
-| 10 | Configure serve | `darwin serve config create ...` |
-| 11 | Build artifact | `darwin serve artifact create ...` |
+| 9 | Configure serve auth | `darwin serve configure` |
+| 10 | Create environment | `darwin serve environment create ...` |
+| 11 | Create serve app | `darwin serve create --name wine-lightgbm-classifier ...` |
 | 12 | Deploy model | `darwin serve deploy-model ...` |
 | 13 | Test inference | `curl -X POST .../predict` |
 | 14 | Undeploy | `darwin serve undeploy-model ...` |
@@ -661,13 +698,13 @@ In this example, you learned how to:
 
 ## Comparison: LightGBM vs Random Forest (Iris Example)
 
-| Aspect | This Example (LightGBM Wine) | Iris Example (Spark RF) |
+| Aspect | This Example (LightGBM Wine) | Iris Example (Sklearn RF) |
 |--------|------------------------------|-------------------------|
-| Algorithm | LightGBM (Gradient Boosting) | PySpark Random Forest |
-| Training | Native LightGBM on driver | Distributed Spark ML |
+| Algorithm | LightGBM (Gradient Boosting) | Sklearn Random Forest |
+| Training | Hybrid: Spark data prep + LightGBM | Hybrid: Spark data prep + Sklearn |
 | Data Prep | Spark DataFrames | Spark DataFrames |
 | Dataset | Wine (178 samples, 13 features) | Iris (150 samples, 4 features) |
-| Use Case | Medium datasets, high accuracy | Large datasets, distributed |
+| Use Case | Medium datasets, high accuracy | Medium datasets, classification |
 
 ---
 
@@ -726,8 +763,8 @@ kubectl rollout restart deployment -n ingress-nginx ingress-nginx-controller
 | File | Description |
 |------|-------------|
 | `README.md` | This guide |
-| `train_lightgbm_wine_spark.ipynb` | Complete training notebook |
-| `train_lightgbm_wine.ipynb` | Alternative non-Spark version |
+| `train_lightgbm_wine_spark.ipynb` | Hybrid training notebook (Spark + LightGBM) |
+| `train_lightgbm_wine.ipynb` | Alternative non-distributed version |
 | `init-example.sh` | Quick setup script |
 | `cluster-config.yaml` | Compute cluster configuration |
 | `serve-config.yaml` | ML-Serve infrastructure config |
